@@ -1,0 +1,724 @@
+<?php 
+if (!defined('BASEPATH'))
+	exit('No direct script access allowed');
+
+class libera_pedido extends CI_Controller
+{
+    var $skey = "SuPerEncGATEWAYAPI";  // nunca alterar
+    public $layout = '';
+    public $title = 'Integração AvaAprovaconcursos';
+
+    public function __construct() 
+    {	
+        parent::__construct();
+        $this->load->model('pedido_model', 'pedido');
+        $this->load->model('pedidoava_model', 'pedidoava');
+        $this->load->model('cadastro_model', 'cadastro');
+        // Libraries
+        $this->sdb = $this->awslib->get_sdb();
+        $this->load->library('cielo/LR');
+        $this->load->library('redecard/Auth');
+        //helper
+        $this->load->helper('function');
+    }
+
+    function safe_b64decode($string) {
+        $data = str_replace(array('-', '_'), array('+', '/'), $string);
+        $mod4 = strlen($data) % 4;
+        if ($mod4) {
+            $data .= substr('====', $mod4);
+        }
+        return base64_decode($data);
+    }
+
+    function decode($value) {
+
+        if (!$value) {
+            return false;
+        }
+        $crypttext = $this->safe_b64decode($value);
+        $iv_size = mcrypt_get_iv_size(MCRYPT_RIJNDAEL_256, MCRYPT_MODE_ECB);
+        $iv = mcrypt_create_iv($iv_size, MCRYPT_RAND);
+        $decrypttext = mcrypt_decrypt(MCRYPT_RIJNDAEL_256, $this->skey, $crypttext, MCRYPT_MODE_ECB, $iv);
+        return trim($decrypttext);
+    }
+    
+    function sendEmailTentativasGateway($pedidoid = NULL) {
+        
+        $params['pedidoid'] = $pedidoid;
+        $listaPedido = $this->pedido->listaPedido($params);
+        //$listaPedido['statusacompanhamentoid'] = 4;                             // PARA TESTE
+        $listaUrlSmart = $this->pedido->listaUrlSmart($listaPedido);
+ 
+        // union itens.
+        $ids = explode('+', $listaPedido['iditens']);
+        $idsD = explode('+', $listaPedido['itens']);
+        $result = array_combine($ids, $idsD);
+
+        $dados = new stdClass();
+        $dados->assinaturaMatriculaID = $params['pedidoid'];
+        $dados->produtos = json_encode($result);
+
+        // Envia Email SmartFocus
+        if (isset($listaUrlSmart['conteudo'])) {
+
+            $url_replace = str_replace('{PARAM_CLIENTE_NOME}', utf8_decode($listaPedido['nome']), $listaUrlSmart['conteudo']);
+            $url_replace = str_replace('{PARAM_PEDIDO_DESCRICAO_ITENS}', utf8_decode($listaPedido['itens']), $url_replace);
+            $url_replace = str_replace('{PARAM_SITE_LINK}', 'http://www.aprovaconcursos.com.br/', $url_replace);
+            $url_replace = str_replace('{PARAM_SITE_PORTALESTUDOS}', 'http://ava.aprovaconcursos.com.br/', $url_replace);
+            $url_replace = str_replace('{PARAM_SITE_LINK_NOME}', 'Aprova Concursos', $url_replace);
+            $url_replace = str_replace('{PARAM_CLIENTE_EMAIL}', $listaPedido['email'], $url_replace);
+            $url_replace = str_replace('{PARAM_CLIENTE_SENHA}', '(a mesma utilizada no ato da compra)', $url_replace);
+            $url_replace = str_replace('{PARAM_SITE_LINK_FALECONOSCO}', 'faleconosco@aprovaconcursos.com.br', $url_replace);
+            $url_replace = str_replace('{PARAM_PEDIDO_DATACOMRA}', date('d-m-Y'), $url_replace);
+            $url_replace = str_replace('{LINK_REIMPRESSAO_BOLETO}', str_replace('?', '', site_url($this->uri->uri_string)), $url_replace);
+            $url_replace = str_replace('{PARAM_SITE_LINK_IMAGEM}', 'https://gateway.aprovaconcursos.com.br/public/img/email/', $url_replace);
+            $url_replace = str_replace('{PARAM_SITE_TELEFONE}', '0800 725 8004', $url_replace);
+            $url_replace = utf8_encode($url_replace);
+
+//            $this->email->initialize(array(
+//                'protocol' => 'smtp',
+//                'smtp_host' => 'smtp.sendgrid.net',
+//                'smtp_user' => 'iesde2014',
+//                'smtp_pass' => 'iesde@123',
+//                'smtp_port' => 587,
+//                'crlf' => "\r\n",
+//                'newline' => "\r\n",
+//                'mailtype' => 'html'
+//            ));
+            
+            $this->email->initialize(array(
+                'protocol' => 'smtp',
+                'smtp_host' => 'smtp.gw.aprovaconcursos.com.br',
+                'smtp_user' => 'enviaweb@gw.aprovaconcursos.com.br',
+                'smtp_pass' => 'GWenvi4WEb#',
+                'smtp_port' => 25,
+                'crlf' => "\r\n",
+                'newline' => "\r\n",
+                'mailtype' => 'html'
+            ));
+
+            $this->email->from('noreply@aprovaconcursos.com.br', 'Aprova Concursos');
+            
+            if (ENVIRONMENT == 'development') 
+            {
+                $this->email->to('desenvolvimento.ti@iesde.com.br'); 
+            } 
+            else
+            {
+                $this->email->to($listaPedido['email']); 
+            }
+            //$this->email->cc('ricardo.souza@iesde.com.br');
+            //$this->email->bcc('flavio.vieira.cia@gmail.com');
+            $this->email->subject('Status Acompanhamento Pedido : ' . $listaPedido['status']);
+            $this->email->message($url_replace);
+            //$this->email->send();
+            //echo $this->email->print_debugger();die;
+            
+            if (!$this->email->send()) {
+                $r = $this->pedido->emailsReenviar($listaPedido);
+            }
+        }
+    }
+
+    public function gateway_tentativas() {
+        
+           // Busca todos os Pedidos com status 3 "Em Analise"
+           $pedidos = $this->pedido->getPedidosEmAnalise();
+           $totalPedidos = count($pedidos);
+           
+           if ($totalPedidos >= 1) {
+               
+               for ($i = 0; $i < $totalPedidos; $i++ ) {
+                   
+                   $decrypt = $this->decode($pedidos[$i]['conteudo']);
+                   $decode  = json_decode($decrypt);
+                   $tipo = $decode->servico; // redecard ou cielo
+                   
+                   if (isset($tipo)) {
+                   
+                       $api_server = 'https://api.iesde.com.br/';
+                       if (ENVIRONMENT == 'development' || ENVIRONMENT == 'testing') {
+                           $api_server = 'http://api.iesde.com.br.programador02.dev.iesde.com.br/';
+                       }
+                       
+                       $api_http_user = '910026f84209f258ef9a15b80127514d9c9690b0';
+                       $api_http_pass = 'e841eb2a5db56401fbe9af3cc79be4167d2d1da3';
+                       $api_name = 'IESDE-API-KEY';
+                       $api_key = 'ef6fbb81bd6a4f26a3283988230e6f871e54c9e1'; //chave empresa 3 ava.aprovaconcursos.com.br
+                       $metodo = "{$tipo}/servico";
+
+                       if (isset($decrypt)) {
+                            
+                           $pedidoid = $pedidos[$i]['pedidoid'];
+                           print_r ("</br>Pedido :: $pedidoid iniciando tentativa</br>");
+                           print_r ("</br>Serviço :: $tipo</br>");
+                            
+                               // Dados pedido
+                               $valores['pedidoid'] = $pedidos[$i]['pedidoid'];
+                               $valores['total']    = $decode->total;
+                               $valores['bandeira'] = $decode->bandeira;
+                               $valores['parcelas'] = $decode->parcelas;
+
+                               // Dados endereco (AVS - analise de risco cielo)
+                               if ($tipo == 'cielo' && empty($pedidos[$i]['token'])) {
+                                   $valores['bairro']      = $decode->bairro;
+                                   $valores['cep']         = $decode->cep;
+                                   $valores['complemento'] = $decode->complemento;
+                                   $valores['endereco']    = $decode->endereco;
+                               }  
+
+                               // Dados cartão
+                               if (empty($decode->oneclicktoken)) {
+                                    $valores['titular']         = $decode->titular;
+                                    $valores['numerocartao']    = $decode->numerocartao;
+                                    $valores['mescartao']       = $decode->mescartao;
+                                    $valores['anocartao']       = $decode->anocartao; 
+                                    $valores['codigoseguranca'] = $decode->codigoseguranca; 
+                               }    
+                                    
+                               // Funcionalidade - (Token Cielo)
+                               if ($tipo == 'cielo' && !empty($decode->oneclicktoken)) {
+                                   $valores['oneclicktoken'] = $decode->oneclicktoken; 
+                               }
+                                
+                               $format = 'json';
+                               $postData = '';
+                               foreach ($valores as $k => $v) {
+                                   $postData .= $k . '=' . urlencode($v) . '&';
+                               }
+
+                               rtrim($postData, '&');
+
+                               $curl = curl_init();
+                               $url = "{$api_server}/{$metodo}?{$postData}format={$format}";
+  
+                               curl_setopt($curl, CURLOPT_URL, $url);
+                               curl_setopt($curl, CURLOPT_HTTPAUTH, CURLAUTH_DIGEST);
+                               curl_setopt($curl, CURLOPT_USERPWD, "{$api_http_user}:{$api_http_pass}");
+                               curl_setopt($curl, CURLOPT_HTTPHEADER, array("{$api_name}:{$api_key}"));
+                               curl_setopt($curl, CURLOPT_NOBODY, 1);
+                               curl_exec($curl);
+
+                               curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+                               curl_setopt($curl, CURLOPT_HEADER, 0);
+                               curl_setopt($curl, CURLOPT_HTTPGET, 1);
+                               curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, 0);
+                               $output = curl_exec($curl);
+
+                               $result_decode =  json_decode($output);
+                                
+                                // Simulação Redecard
+                                //$result_decode = json_decode('{"codRet":"0","msgRet":"Refa\\u00e7a a transa\\u00e7\\u00e3o. Sua transa\\u00e7\\u00e3o n\\u00e3o pode ser conclu\\u00edda. Por favor, tente novamente.","numPedido":"842","data":"","numAutor":"","numCv":"","numAutent":"","numSqn":"","origemBin":"","confCodRet":null,"confMsgRet":null,"rawResponse":"76<\\/CODRET>Refa\\u00e7a a transa\\u00e7\\u00e3o. Sua transa\\u00e7\\u00e3o n\\u00e3o pode ser conclu\\u00edda. Por favor, tente novamente.<\\/MSGRET>842<\\/NUMPEDIDO><\\/AUTHORIZATION>"}');
+                                
+                                // Simulação Cielo
+                                //$result_decode = json_decode('{"@attributes":{"versao":"1.4.0","id":"1"},"tid":"10069930692056BF1001","pan":"XuuYFQia6R\\/XzTjtIushfKc3TT8PbEQk1LUgpy0mvR8=","dados-pedido":{"numero":"500","valor":"49999","moeda":"986","data-hora":"2015-01-02T14:58:19.785-02:00","descricao":{},"idioma":"PT","taxa-embarque":"0"},"forma-pagamento":{"bandeira":"amex","produto":"1","parcelas":"1"},"status":"5","autenticacao":{"codigo":"5","mensagem":"Transacao sem autenticacao","data-hora":"2015-01-02T14:58:19.794-02:00","valor":"49999","eci":"7"},"autorizacao":{"codigo":"5","mensagem":"Autoriza\\u00c3\\u00a7\\u00c3\\u00a3o negada","data-hora":"2015-01-02T14:58:19.799-02:00","valor":"49999","lr":"51","nsu":"119359"}}');
+                                
+                                //print_pre ($result_decode);die
+                                
+                                // so falta atualizar as retentivas no inicio do processo
+                                if ($tipo == 'redecard') {
+                                    
+                                    // atualiza tentativasefetuada
+                                    $dadosRedecard['pedidoid'] = $pedidos[$i]['pedidoid'];
+                                    $dadosRedecard['tentativasefetuada'] = $pedidos[$i]['tentativasefetuada'];
+                                    $this->pedido->atualizaStatusPedido($dadosRedecard);
+                                    
+                                    // Verfifica se não houve nenhum erro de parâmetrização
+                                    $responseParam = array();
+                                    $responseParam = $this->auth->responseParam($result_decode->codRet);
+
+                                    if (isset($responseParam['retentativa'])) {
+                                        if ($responseParam['retentativa'] === 'N' && $result_decode->codRet > 0) {
+
+                                            // Cancela o pedido e exibe a mensagem do problema ocorrido.
+                                            $dadosRedecard['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+                                            $this->pedido->atualizaStatusPedido($dadosRedecard);
+                                            $id = $result_decode->codRet;
+                                            $status = utf8_decode($responseParam['mensagem']);
+                                            
+                                            // Envia Email Cliente "Status" Pedido
+                                            $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                            
+                                            // remove pedido tabela MY018_TentivasCompras
+                                            $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+                                            
+                                            // Efetua Integração SQL Server
+                                            //$this->processa($pedidos[$i]['pedidoid']);
+                                            
+                                            print_r ("Status :: Cancelado</br>");
+                                            print_r ("Motivo :: id::$id Status:: $status </br></br>");
+                                            print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                        } else {
+                                            
+                                            // sucess
+                                            if (@$result_decode->codRet >= 0) {
+                                                // Atualiza situação do pedido (DY005_Pedidos)
+                                                if ($pedidos[$i]['pedidoid']) {
+                                                    if ($result_decode->codRet == 0) { // Transacao Aprovada
+                                                        
+                                                        $dadosRedecard['statusid'] = 4;  // situação pedido "Pago" (DY013_StatusAcompanhamento)
+                                                        $this->pedido->atualizaStatusPedido($dadosRedecard);
+                                                        
+                                                        // Envia Email Cliente "Status" Pedido
+                                                        $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                        
+                                                        // Remove pedido tabela MY018_TentivasCompras
+                                                        $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+                                                        
+                                                        // Efetua Integração SQL Server
+                                                        $this->processa($pedidos[$i]['pedidoid']);
+                                                        
+                                                        print_r ("Status :: Pago</br>");
+                                                        print_r ("Motivo :: Pagamento efetuado com suceso</br></br>");
+                                                        print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                                    } else {
+
+                                                        $responseAuth = array();
+                                                        $responseAuth = $this->auth->responseAuth($result_decode->codRet);
+                                                        if (isset($responseAuth['retentativa'])) {
+
+                                                            if ($responseAuth['retentativa'] === 'N') {
+
+                                                                // Cancela o pedido e exibe a mensagem do problema ocorrido.
+                                                                $dadosRedecard['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+                                                                $this->pedido->atualizaStatusPedido($dadosRedecard);
+                                                                $id = $result_decode->codRet;
+                                                                $status = utf8_decode($responseAuth['mensagem']);
+                                                                
+                                                                // Envia Email Cliente "Status" Pedido
+                                                                $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                                
+                                                                // Remove pedido tabela MY018_TentivasCompras
+                                                                $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+                                                                
+                                                                // Efetua Integração SQL Server
+                                                                //$this->processa($pedidos[$i]['pedidoid']);
+                                                                
+                                                                print_r ("Status :: Cancelado</br>");
+                                                                print_r ("Motivo :: id::$id Status:: $status </br></br>");
+                                                                print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                                            } else if ($responseAuth['retentativa'] === 'S') {
+
+                                                                $tentativasefetuada = $pedidos[$i]['tentativasefetuada'] + 1;
+                                                                if ($tentativasefetuada >= $pedidos[$i]['tentativaspermitida'] ) {
+
+                                                                    // print_r ('cancela pedido e remove da MY018_TentivasCompras');die;
+                                                                    // Cancela o pedido e exibe a mensagem do problema ocorrido.
+                                                                    $dadosRedecard['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+                                                                    $this->pedido->atualizaStatusPedido($dadosRedecard);
+                                                                    
+                                                                    // Envia Email Cliente "Status" Pedido
+                                                                    $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                                    
+                                                                    // Remove pedido tabela MY018_TentivasCompras
+                                                                    $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+                                                                    
+                                                                    // Efetua Integração SQL Server
+                                                                    //$this->processa($pedidos[$i]['pedidoid']);
+
+                                                                    print_r ("Status :: Cancelado</br>");
+                                                                    print_r ("Motivo :: Efetuado número máximo de tentativas permitidas </br></br>");
+                                                                    print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+
+                                                                } else {
+
+                                                                    // print_r ('continua em analise para retentativa');die;
+                                                                    // Atualiza status pedido para em análise para efetuar o processo de retentativa
+                                                                    $dadosRedecard['statusid'] = 3;  // situação pedido "Em Análise" (DY013_StatusAcompanhamento)
+                                                                    $this->pedido->atualizaStatusPedido($dadosRedecard);
+
+                                                                    print_r ("Status :: Em Analise</br>");
+                                                                    print_r ("Motivo :: Efetuado nova tentativa porém ainda não foi possível</br></br>");
+                                                                    print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }  
+                                            }
+                                        }
+                                    }
+                                } else if ($tipo == 'cielo') {
+                                    
+                                    // atualiza tentativasefetuada
+                                    $dadosCielo['pedidoid'] = $pedidos[$i]['pedidoid'];
+                                    $dadosCielo['tentativasefetuada'] = $pedidos[$i]['tentativasefetuada'];
+                                    $this->pedido->atualizaStatusPedido($dadosCielo);
+                                    
+                                    if (isset($result_decode->error)) {
+                                        
+                                        $error = utf8_decode($result_decode->error);
+                                        print_r ("Status :: Erro envio parâmetros</br>");
+                                        print_r ("Motivo :: $error</br></br>");
+                                        print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                    } else {
+                                        
+                                        if (@$result_decode->captura->codigo) { // realizou somente a captura 5
+                                            $result['id'] = $result_decode->captura->codigo;
+                                            $result['status'] = utf8_decode($result_decode->captura->mensagem);
+                                            $result['lr'] = @$result_decode->captura->lr;
+                                        } else if (@$result_decode->autorizacao->codigo) {  // realizou somente a autorizacao 6
+                                            $result['id'] = $result_decode->autorizacao->codigo;
+                                            $result['status'] = utf8_decode($result_decode->autorizacao->mensagem);
+                                            $result['lr'] = $result_decode->autorizacao->lr;
+                                        } else if (@$result_decode->codigo) {               // em caso de erro
+                                            $result['id'] = $result_decode->codigo;
+                                        }
+
+                                        // sucess
+                                        if (@$result['id'] == 5 || @$result['id'] == 6) {
+
+                                            // Atualiza situação do pedido (DY005_Pedidos)
+                                            if ($pedidos[$i]['pedidoid']) {
+                                                if ($result_decode->status == 4 || $result_decode->status == 6)  {
+
+                                                    $dadosCielo['statusid'] = 4;  // situação pedido "Pago" (DY013_StatusAcompanhamento)
+                                                    $this->pedido->atualizaStatusPedido($dadosCielo);
+
+                                                    // Envia Email Cliente "Status" Pedido
+                                                    $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                    
+                                                    // Remove pedido tabela MY018_TentivasCompras
+                                                    $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+                                                    
+                                                    // Efetua Integração SQL Server
+                                                    $this->processa($pedidos[$i]['pedidoid']);
+                                                    
+                                                    print_r ("Status :: Pago</br>");
+                                                    print_r ("Motivo :: Pagamento efetuado com suceso</br></br>");
+                                                    print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                                } else {
+
+                                                    $responseLR = array();
+                                                    $responseLR = $this->lr->responselr($result['lr']);
+
+                                                    if (isset($responseLR['retentativa'])) {
+
+                                                        if ($responseLR['retentativa'] === 'N') {
+                                                            // Cancela o pedido e exibe a mensagem do problema ocorrido.
+                                                            $dadosCielo['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+                                                            $this->pedido->atualizaStatusPedido($dadosCielo);
+                                                            $id = $result['lr'];
+                                                            $status = utf8_decode($responseLR['mensagem']);
+                                                            
+                                                            // Envia Email Cliente "Status" Pedido
+                                                            $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                            
+                                                            // Remove pedido tabela MY018_TentivasCompras
+                                                            $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+
+                                                            // Efetua Integração SQL Server
+                                                            //$this->processa($pedidos[$i]['pedidoid']);
+                                                             
+                                                            print_r ("Status :: Cancelado</br>");
+                                                            print_r ("Motivo :: id::$id Status:: $status </br></br>");
+                                                            print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+
+                                                        } else if ($responseLR['retentativa'] === 'S') {
+                                                            
+                                                            $tentativasefetuada = $pedidos[$i]['tentativasefetuada'] + 1;
+                                                            if ($tentativasefetuada >= $pedidos[$i]['tentativaspermitida'] ) {
+
+                                                                // print_r ('cancela pedido e remove da MY018_TentivasCompras');die;
+                                                                // Cancela o pedido e exibe a mensagem do problema ocorrido.
+                                                                $dadosCielo['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+                                                                $this->pedido->atualizaStatusPedido($dadosCielo);
+
+                                                                // Envia Email Cliente "Status" Pedido
+                                                                $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                                
+                                                                // Remove pedido tabela MY018_TentivasCompras
+                                                                $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+
+                                                                // Efetua Integração SQL Server
+                                                                //$this->processa($pedidos[$i]['pedidoid']);
+                                                                
+                                                                print_r ("Status :: Cancelado</br>");
+                                                                print_r ("Motivo :: Efetuado número máximo de tentativas permitidas </br></br>");
+                                                                print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+
+                                                            } else {
+
+                                                                // print_r ('continua em analise para retentativa');die;
+                                                                // Atualiza status pedido para em análise para efetuar o processo de retentativa
+                                                                $dadosCielo['statusid'] = 3;  // situação pedido "Em Análise" (DY013_StatusAcompanhamento)
+                                                                $this->pedido->atualizaStatusPedido($dadosCielo);
+
+                                                                print_r ("Status :: Em Analise</br>");
+                                                                print_r ("Motivo :: Efetuado nova tentativa porém ainda não foi possível</br></br>");
+                                                                print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }   
+                                        } else {
+
+                                            if (isset($result['id'])) {
+
+                                                $responseParam = array();
+                                                $responseParam = $this->lr->responseParam($result['id']);
+
+                                                // Cancela o pedido e exibe a mensagem do problema ocorrido.
+                                                $dadosCielo['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+                                                $this->pedido->atualizaStatusPedido($dadosCielo);
+                                                $id = $result['id'];
+                                                $status = utf8_decode($responseParam['mensagem']);
+                                                
+                                                // Envia Email Cliente "Status" Pedido
+                                                $this->sendEmailTentativasGateway($pedidos[$i]['pedidoid']);
+                                                
+                                                // Remove pedido tabela MY018_TentivasCompras
+                                                $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+                                                
+                                                // Efetua Integração SQL Server
+                                                //$this->processa($pedidos[$i]['pedidoid']);
+
+                                                print_r ("Status :: Cancelado</br>");
+                                                print_r ("Motivo :: id::$id Status:: $status </br></br>");
+                                                print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                                            }
+                                        }   
+                                    }
+                                }
+                                
+//                            }  else  {
+//              
+//                                // Cancela o pedido e exibe a mensagem do problema ocorrido.
+//                                $params['statusid'] = 6;  // situação pedido "Cancelado" (DY013_StatusAcompanhamento)
+//                                $params['pedidoid'] = $pedidos[$i]['pedidoid'];
+//                                $result = $this->pedido->atualizaStatusPedido($params);
+//                                
+//                                // remove pedido tabela MY018_TentivasCompras
+//                                $this->pedido->removePedidoTentativasCompras($pedidos[$i]['pedidoid']);
+//                                
+//                                if (isset($result)) {
+//                                    
+//                                    print_r ("Status :: Cancelado</br>");
+//                                    print_r ("Motivo :: Campos nrCartao e cvc2 estão criptografados</br></br>");
+//                                    print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+//                                } else {
+//                                    
+//                                    print_r ("Status :: Erro</br>");
+//                                    print_r ("Motivo :: Não foi possível efetuar o cancelamento do pedido</br></br>");
+//                                    print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+//                                }
+//                            }
+
+                        } else {
+              
+                            print_r ("Status :: Erro</br>");
+                            print_r ("Motivo :: Pedido não contém log de parâmetros</br></br>");
+                            print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                        }
+                        
+                   } else {
+                       
+                        print_r ("Status :: Erro</br>");
+                        print_r ("Motivo :: Tipo serviço não definido</br></br>");
+                        print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+                   }
+               }
+           } else {
+               
+                print_r ("Status :: Ok</br>");
+                print_r ("Motivo :: Nenhum pedido Em Análise para efetuar processo de tentativas</br></br>");
+                print_r ("--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------</br>");
+           }
+
+        }
+        
+	public function processa($pedidoid = NULL) {
+            
+            if ($this->input->post('id', true)) {
+                $pedidoid = $this->input->post('id', TRUE);
+            } else if ($this->input->get('pedidoid', TRUE)) {
+                $pedidoid = $this->input->get('pedidoid', TRUE);
+            }
+
+            if (empty($pedidoid)) {
+                $data['resultado'] = 'erro';
+                $data['msg'] = 'Envio de parâmetros incorreto!';
+            } else {
+
+                // pegar dados do mysql
+                $pedidos = $this->pedido->getPedidos(0, '', $pedidoid);
+                $item = isset($pedidos[0]) ? $pedidos[0] : '';
+
+                if ($item) {
+                
+                    $item->exibesql = 'N';
+                    if ($this->input->get('pedidoid', TRUE)) {
+                        $item->exibesql = 'S';
+                    }
+
+                    // importa para o ava
+                    $item->senha = $this->encrypt->decode($item->senha, 'GATEWAY_PASSWORD_USER_KEY');
+
+                    switch ($item->servicoid) {
+                        case '1' : $tipodocid = 57;
+                            break; // redecard
+                        case '2' : $tipodocid = 57;
+                            break; // cielo
+                        case '3' : $tipodocid = 15;
+                            break; // boleto
+                        case '4' : $tipodocid = 55;
+                            break; // pagseguro
+                        case '5' : $tipodocid = 78;
+                            break; // cartaoiesde 100%
+                    }
+                    $item->tipodocid = $tipodocid;
+
+                    if (empty($item->parcelas))
+                        $item->parcelas = 1;
+
+                    if ($tipodocid == 15) {
+                        $item->rec = "N";
+                        $item->cedenteid = $item->cedenteidibava;
+                    } else if ($tipodocid == 55 && $item->statusPedido == '4') { //pago
+                        $item->rec = 'N';
+                    }
+
+                    $item->vendaid = "NULL";
+                    $sucesso = false;
+
+                    // TODO: quando tiver parceiros, informar quem são
+                    $item->clienteid = "NULL";  
+                    $item->unidadeid = "NULL";  
+
+                    if (!empty($item->parceiroid)) {
+                        $item->unidadeid = substr($item->parceiroid, 0, 2); // 2 primeiro unidade
+                        $item->clienteid = substr($item->parceiroid, 2);     // restante é o cliente
+                        $item->parceiroid = 0;
+                    }
+
+                    // gera a venda
+                    $result = $this->pedidoava->geraAcessoVenda($item);
+
+                    if ($item->exibesql == 'S') {
+                        print_pre($result);
+                        die;
+                    }
+
+                    $erro = trim($result->MsgError);
+
+                    if (isset($result) && empty($erro)) {
+                        $data['resultado'] = 'sucesso';
+                        // atualiza para "Liberando Pedido"
+                        $this->pedido->atualizaSituacaoPedido($pedidoid, 5); // Liberando Pedido
+
+                        // envia o vendaid para não criar novamente
+                        $item->vendaid = @$result->VendaID;
+
+                        $simpledbError = $this->atualizaAlunoSimpleDB($result);
+                        $data['status'] = 5;
+                        if ($simpledbError == '') {
+                            // atualiza pedido para "Disponivel"
+                            $this->pedido->atualizaSituacaoPedido($pedidoid, 7); // Disponivel
+                            $data['status'] = 7;
+                        }
+                    } else {
+                        $data['resultado'] = 'erro';
+                        $data['msg'] = $result->MsgError;
+                    }            
+                } 
+                else 
+                {
+                    $data['resultado'] = 'erro';
+                    $data['msg'] = 'Nenhum pedido encontrado!';
+                }
+            }
+            // retorno para o client
+            print(json_encode($data));
+    }
+
+    function atualizaAlunoSimpleDB($venda)
+    {    	
+    	// liberando pedido
+    	$dados = $this->cadastro->getAlunos($venda->PessoaID);
+    	$result = '';
+    	    	
+    	if (!empty($dados)) 
+    	{
+	    	// Monta o array para envio dos dados para aws - Amazon
+	    	$alunos = array(
+	                'Email' => trim($dados[0]->Email),
+	                'Senha' => $dados[0]->Senha,
+	                'Nome' => trim(utf8_encode($dados[0]->Nome)),
+	                'PessoaPerfilID' => $dados[0]->PessoaPerfilID,
+	                'MatriculaID' => $dados[0]->MatriculaID,
+					'CPF' => trim(utf8_encode($dados[0]->Cpf)),
+					'Celular' => trim(utf8_encode($dados[0]->Celular)),
+					'Endereco' => trim(utf8_encode($dados[0]->Endereco)),
+					'Cep' => trim(utf8_encode($dados[0]->Cep)),
+					'Bairro' => trim(utf8_encode($dados[0]->Bairro)),
+					'Cidade' => trim(utf8_encode($dados[0]->Cidade)),
+					'Estado' => trim(utf8_encode($dados[0]->Estado)),
+	            );
+	            
+	        if($dados[0]->SimpleDB == 'S'){
+	        	unset($alunos['Senha']);               
+	        }
+	    	
+	    	$response = $this->cadastro->insertput('D001_Login_Aprovaconcursos', $venda->PessoaID, $alunos);    	
+	    	if ($response == TRUE) 
+	    	{
+	    		$retorno = $this->cadastro->atualizaE001($dados[0]->PessoaID);
+	    		if (empty($retorno)) {
+	    			$result = 'Problemas ao atualizar E001_Pessoas ' . ' PessoaID' . $dados[0]->PessoaID . ' MatriculaID ' . $dados[0]->MatriculaID . ' <br/>';
+	    		}
+	    	} else {
+	    		$result = 'Problemas ao Inserir Alunos SimpleDB ' . ' PessoaID' . $dados[0]->PessoaID . ' MatriculaID ' . $dados[0]->MatriculaID . 'Response' . $response .' <br/> ';
+	    	}
+    	}
+    	    	
+    	if ($result == '') 
+    	{
+	    	// atualiza os pacotes
+	    	$dados = $this->cadastro->getPacotes($venda->MatriculaID);
+
+                    for ($i = 0; $i < count($dados); $i++) 
+                    {
+                            // Monta o array para envio dos dados para aws - Amazon
+								$pacotes = array(
+                'MatriculaID' => trim($dados[$i]->MatriculaID),
+                'GrupoAulaID' => $dados[$i]->GrupoAulaID,
+                'DtInicio' => ($dados[$i]->DtInicio) ? $dados[$i]->DtInicio : '-',
+                'DtFim' => ($dados[$i]->DtFim) ? $dados[$i]->DtFim : '-',
+                'DescricaoPacote' => utf8_encode(trim($dados[$i]->Descricao)),
+                'BoletoID' => ($dados[$i]->BoletoID) ? ($dados[$i]->BoletoID) : '-',
+                'Rec' => ($dados[$i]->Rec) ? $dados[$i]->Rec : '-',
+                'Ancora'  => ($dados[$i]->Ancora) ? trim(encodeSEOString($dados[$i]->Ancora)) : '-',
+                'Situacao' => $dados[$i]->Situacao,
+				'DuracaoPacote' =>  utf8_encode(trim($dados[$i]->DuracaoPacote)),
+            	'DiasAcesso' =>  utf8_encode(trim($dados[$i]->DiasAcesso)),
+                'ValorPacote' => utf8_encode(trim($dados[$i]->ValorPacote)),
+                'QtdAcessosSimultaneos' => $dados[$i]->QtdAcessosSimultaneos,
+                'AssinaturaSistemaID' => utf8_encode(trim($dados[$i]->AssinaturaSistemaID)),
+                'ValorPago' => utf8_encode(trim($dados[$i]->ValorPago)),
+				'ContratoID' => trim($dados[$i]->ContratoID),
+            	'CompraRecorrente' => trim($dados[$i]->CompraRecorrente)
+            );
+
+                            $response = $this->cadastro->insertput('D003_PacotesAluno_' . $dados[$i]->BaseSimpleDB, $dados[$i]->AssinaturaMatriculaID, $pacotes);
+
+                            if($response == TRUE){
+                                    $retorno = $this->cadastro->atualizaE086($dados[$i]->AssinaturaMatriculaID);
+
+                                    if (empty($retorno)) {
+                                            $result .= 'Problemas ao atualizar E086_AssinaturasMatriculaID ' . ' AssinaturaMatriculaID' . $dados[$i]->AssinaturaMatriculaID . ' MatriculaID ' . $dados[$i]->MatriculaID . ' <br/>';
+                                    }
+                            }else  {
+                                    $result .= 'Problemas ao Inserir Pacotes SimpleDB ' . ' AssinaturaMatriculaID ' . $dados[$i]->AssinaturaMatriculaID . '<br/>';
+                            }
+                    }
+               
+    	}
+    	        	
+    	return $result;
+    }
+    
+}
+
+?>
