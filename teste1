@@ -1,0 +1,922 @@
+<?php
+
+/**
+ * Controlador Principal
+ * @author Leonardo Porto
+ */
+class Principal extends MY_Controller
+{
+
+    /**
+     * Layout default utilizado pelo controlador.
+     */
+    public $layout = 'default';
+
+    /**
+     * Titulo da pagina.
+     */
+    public $title = 'Aprova Concursos - faça um concurso público!';
+
+    /**
+     * Definindo os css default usados pelas paginas.
+     */
+    public $cssMinify = array(
+        '_reset',
+        'geral',
+        'colorbox',
+        'css-sprite-aprova'
+    );
+
+    /**
+     * Carregando o js default para a home.
+     */
+    public $js = array();
+ // 'jquery.colorbox','menu-lateral'
+    
+    /**
+     * Carregando a descricao default da pagina principal.
+     */
+    public $description = 'Aprova Concursos - faça um concurso público! Últimas notícias. Curso com videoaula e apostila. Prepare-se com o nº1 em concursos!';
+
+    /**
+     * Carregando os keywords default da pagina principal.
+     */
+    public $keywords = array(
+        'concurso, aprova concursos, noticias, apostila, videoaula, curso'
+    );
+
+    /**
+     * Carregando analytics default
+     */
+    public $analytics = '';
+
+    /**
+     * Carregando Banner da página principal
+     */
+    public $banner = '';
+
+    /**
+     * Carregando Topo da página principal
+     */
+    public $topo = '';
+
+    /**
+     * Carregando Rodapé da página principal
+     */
+    public $rodape = '';
+
+    /**
+     * Carregando MenuVertical da página principal
+     */
+    public $menuVertical = '';
+
+    /**
+     * Controlador das funcoes principais do site
+     */
+    
+    /**
+     * Carregando o boxFlutuante
+     */
+    public $boxFlutuante = '';
+
+    /**
+     * Carregando metatags facebook
+     */
+    public $meta = '';
+
+    /**
+     * Construtora.
+     * 
+     * @return
+     *
+     */
+    function __construct()
+    {
+        parent::__construct();
+        //print_pre($_SERVER);die;
+        /* identificaNavegador(); // desabilitado verificação mobile */
+        $this->load->library('parser');
+        $this->load->library('principal_lib');
+        
+        $this->load->model('principal_model', 'principal');
+        
+        $this->load->library('webservice');
+        $this->load->driver('cache', array(
+            'adapter' => 'memcached'
+        ));
+        if (! isset($this->CI))
+            $this->CI = new stdClass();
+        
+        /*$this->CI->parceiro = '';
+        $this->CI->positivo = '';
+        if (@$this->uri->segment(1) != 'assinatura-completa-upgrade') {
+            $this->CI->parceiro = $this->principal_lib->cookieParceiro();
+            $this->CI->positivo = $this->principal_lib->cookiePositivo();
+        }*/
+        
+        $this->meta = $this->principal_lib->meta();
+        $analytic['TIPOPAGINA'] = 'other';
+        $this->analytics = $this->principal_lib->analytics(4, '', $analytic);
+        $this->atendimento = $this->principal_lib->getTelefone();
+    }
+
+    public function boxFlutuante()
+    {
+        $this->layout = '';
+        $email = $this->input->post('email');
+        $fecharBox = $this->input->post('fecharBox');
+        
+        if ($email) {
+            setcookie("EmailsInformativo", $email, time() + 60 * 60 * 24 * 365, '/');
+            $result = $this->principal->insereEmailInformativo($email);
+            if ($result && isset($_COOKIE['EmailsInformativo']) == '') {
+                $this->principal_lib->enviaEmail($email, 'N', '', '', 27, 34, 5);
+            }
+            echo '<img src="' . PATH_IMG . 'frase2-box-flutuante.png" alt=""/>';
+        }
+        
+        if ($fecharBox) {
+            setcookie("EmailsInformativoFechar", "fechada", '0', '/');
+        }
+    }
+
+    function index()
+    {
+        $this->load->model('banner_model');
+        $this->load->library('concursos_lib');        
+        $this->output->cache(15);
+        
+        $this->js[] = 'home';
+        
+        // $this->banner = $this->principal_lib->listaBanners();
+        
+        /*
+         * if(isset($_COOKIE['EmailsInformativo'])=='' && isset($_COOKIE['EmailsInformativoFechar'])=='' && empty($fecharBox)){
+         * array_push($this->js, 'menu_flutuante');
+         *
+         * $this->boxFlutuante = $this->principal_lib->boxFlutuante();
+         * }
+         */
+        //$this->cache->delete('menuVertical');
+        if ( ! $menu = $this->cache->get('menuVertical'))
+        {
+            $pacotesmenu = $this->principal_lib->menuVertical();
+            $dadosMenu['regiao'] = $pacotesmenu['regiao'];
+            $dadosMenu['salario'] = $pacotesmenu['salario'];
+            $dadosMenu['instituicao'] = $pacotesmenu['instituicao'];
+            
+            $menu = $this->load->view('sidebar', $dadosMenu, true);
+            // Save into the cache for 5 minutes
+            $this->cache->save('menuVertical', $menu, 7200);
+        }
+        
+        $data['menuVertical'] = $menu;
+        
+        $configuracoes = $this->principal->configuracoes();
+        
+        $pacoteshome = $this->principal_lib->cache('destaques');
+        
+        $data['destaques'] = $this->concursos_lib->decode_xml($pacoteshome['destaques']);        
+        $data['lancamentos'] = $this->concursos_lib->decode_xml($pacoteshome['lancamentos']);
+        
+        $data['videoDemonstrativo'] = $this->principal->getDados($configuracoes[0]->demonstrativos, '', "S");
+        // $data['videos'] = $this->principal_lib->videoDemostrativos($videoDemostrativo);
+        
+       $disciplinas = $this->concursos_lib->decode_xml($pacoteshome['disciplinas']);
+       $data['disciplinas'] = array_slice($disciplinas, 0,4,true);        
+        // $data['lista_apostilas_aprova'] = $this->principal_lib->lista_apostilas_aprova();
+        
+        // analytics
+        $dados['TIPOPAGINA'] = "home";
+        $this->analytics = $this->principal_lib->analytics(4, '', $dados);
+        
+        // banners
+        if ($this->agent->is_mobile())
+        {
+            $data['banners'] = $this->banner_model->getBanners('mobile');
+        }
+        else {
+            $data['banners'] = $this->banner_model->getBanners();
+        }        
+        $this->load->view('home', $data);
+    }
+
+    function demonstrativo()
+    {
+        $this->layout = "";
+        
+        $cod = $this->input->post('cod');
+
+        if (!$cod)
+            $cod = $this->uri->segment(3);
+        
+        $width = $this->uri->segment(4);
+        $height = $this->uri->segment(5);
+        
+        if ($cod) {
+            $dados = $this->principal->getDados($cod, '', 'S');
+            $arquivo = $dados[0]->video;
+        } else {
+            $arquivo = '';
+        }
+        //$arquivo = 'nova_ortografia_da_lingua_portuguesa/nova_ortografia_da_lingua_portuguesa_01.mp4';
+        print(player($arquivo, $width, $height));
+    }
+
+    function demonstrativosdelay()
+    {
+        // incluindo novo css
+        $this->layout = '';
+        $configuracoes = $this->principal->configuracoes();
+        
+        $dados = $this->principal->getDados($configuracoes[0]->demonstrativos, '', "S");
+        
+        print(player($dados[0]->video, 480, 360));
+    }
+
+    function como_funciona()
+    {
+        // $this->output->cache(60);
+        if (! $menu = $this->cache->get('menuVertical')) {
+            $pacotesmenu = $this->principal_lib->menuVertical();
+            $dadosMenu['regiao'] = $pacotesmenu['regiao'];
+            $dadosMenu['salario'] = $pacotesmenu['salario'];
+            $dadosMenu['instituicao'] = $pacotesmenu['instituicao'];
+            
+            $menu = $this->load->view('sidebar', $dadosMenu, true);
+            // Save into the cache for 5 minutes
+            $this->cache->save('menuVertical', $menu, 7200);
+        }
+        
+        $data['menuVertical'] = $menu;
+        $this->title = $this->title . ' | Como Funciona';
+        
+        $this->load->view('como-funciona', $data);
+    }
+
+    function quem_somos()
+    {
+        if (! $menu = $this->cache->get('menuVertical')) {
+            $pacotesmenu = $this->principal_lib->menuVertical();
+            $dadosMenu['regiao'] = $pacotesmenu['regiao'];
+            $dadosMenu['salario'] = $pacotesmenu['salario'];
+            $dadosMenu['instituicao'] = $pacotesmenu['instituicao'];
+            
+            $menu = $this->load->view('sidebar', $dadosMenu, true);
+            // Save into the cache for 5 minutes
+            $this->cache->save('menuVertical', $menu, 7200);
+        }
+        
+        $data['menuVertical'] = $menu;
+        $this->load->view('quem-somos', $data);
+    }
+
+
+    function linha_de_produtos()
+    {
+        
+        // incluindo novo js
+        $this->js[] = 'linha-de-produtos';
+        
+        // $this->output->cache(60);
+        if (! $menu = $this->cache->get('menuVertical')) {
+            $pacotesmenu = $this->principal_lib->menuVertical();
+            $dadosMenu['regiao'] = $pacotesmenu['regiao'];
+            $dadosMenu['salario'] = $pacotesmenu['salario'];
+            $dadosMenu['instituicao'] = $pacotesmenu['instituicao'];
+        
+            $menu = $this->load->view('sidebar', $dadosMenu, true);
+            // Save into the cache for 5 minutes
+            $this->cache->save('menuVertical', $menu, 7200);
+        }
+        
+        $data['menuVertical'] = $menu;
+        
+        $this->load->view('linha-de-produtos', $data);
+    }
+
+    function listaCidades()
+    {
+        $this->layout = '';
+        $postEstado = $this->input->post('estado');
+        $cidade = array(
+            0 => 'Selecione uma cidade'
+        );
+        
+        $cidades = $this->webservice->cidades($postEstado);
+        
+        $html = '<select name="cidades" id="cidades" class="cidades">';
+        $html .= '<option value="">Selecione uma cidade</option>';
+        foreach ($cidades as $val) {
+            
+            $html .= '<option value="' . $val->cidadeid . '">' . $val->nome . '</option>';
+        }
+        
+        $html .= '</select>';
+        
+        print_r($html);
+    }
+
+    function atendimento()
+    {
+        // incluindo novo js
+        $this->js[] = 'jquery.validate';
+        $this->js[] = 'localization/messages_pt_BR.min';
+        $this->js[] = 'jquery.mask';
+        $this->js[] = 'atendimento';
+        
+        // incluindo novo css
+        $this->css[] = 'bootstrap-tagsinput';
+        
+        // Validando dados enviados
+        $this->load->library('form_validation');
+        $this->form_validation->set_rules('nome', 'Nome', 'trim|required');
+        $this->form_validation->set_rules('email', 'E-mail', 'required|valid_email');
+        $this->form_validation->set_rules('telefone', 'Telefone', 'required');
+        $this->form_validation->set_rules('estado', 'Estado', 'required');
+        $this->form_validation->set_rules('cidades', 'Cidade', 'required');
+        $this->form_validation->set_rules('assunto', 'Assunto', 'required');
+        $this->form_validation->set_rules('mensagem', 'Mensagem', 'required');
+        $this->form_validation->set_rules('secure', 'Codigo', 'required');
+        
+        $data['nome'] = '';
+        $data['email'] = '';
+        $data['telefone'] = '';
+        $data['estadoSel'] = '';
+        $data['cidades'] = '';
+        $data['assunto'] = '';
+        $data['mensagem'] = '';
+        $data['msgtelefone'] = '';
+        $data['msgsecure'] = '';
+        $data['returnEmail'] = '';
+        
+        $sessionCaptcha = $this->session->userdata('captchaAtendimento');
+        
+        // Dados invalidos...
+        if (($this->form_validation->run() == FALSE) or (! empty($sessionCaptcha) and strtoupper($this->input->post('secure')) != strtoupper($sessionCaptcha))) {
+            
+            $data['nome'] = set_value('nome');
+            $data['email'] = set_value('email');
+            $data['telefone'] = set_value('telefone');
+            $data['estadoSel'] = set_value('estado');
+            $data['cidades'] = set_value('cidades');
+            $data['assunto'] = set_value('assunto');
+            $data['mensagem'] = set_value('mensagem');
+            
+            $ddd = $this->input->post('dddTelefone');
+            $telefone = str_replace('-', '', $this->input->post('telefone'));
+            
+            if ((! empty($sessionCaptcha)) and (strtoupper($this->input->post('secure')) != strtoupper($sessionCaptcha))) {
+                $data['msgsecure'] = 'Código digitado não corresponde.';
+            }
+        } else {
+            
+            $return = $this->_enviarEmailFaleconosco();
+            
+            if ($return->erro == 0) {
+                $data['returnEmail'] = '<div class="alert alert-success alert-dismissible" role="alert">
+                      <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                      <strong><i class="fa fa-check"></i></strong>' . $return->msg . '</div>';
+            } else {
+                $data['returnEmail'] = '<div class="alert alert-danger alert-dismissible" role="alert">
+                      <button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button>
+                      <strong><i class="fa fa-exclamation"></i></strong> ' . $return->msg . '</div>';
+            }
+        }
+        
+        // Verificando se ja um estado selecionado
+        if (! empty($data['estadoSel'])) {
+            $cidades = $this->webservice->cidades($data['estadoSel']);
+            foreach ($cidades as $val) {
+                $cidade[$val->cidadeid . ':' . $val->nome] = $val->nome;
+            }
+        } else {
+            $cidade = array(
+                '' => 'Selecione uma estado'
+            );
+        }
+        
+        $data['cidade'] = form_dropdown('cidades', $cidade, $data['cidades'], 'id="cidades"');
+        
+        // Passando o link da imagem para a view e gravando na sessão os caracteres
+        $data['captcha'] = $this->captchaAtendimento();
+        $this->load->view('atendimento', $data);
+    }
+
+    function listaCidadesAtendimento()
+    {
+        $this->layout = '';
+        $postEstado = $this->input->post('estado');
+        
+        $cidades = $this->webservice->cidades($postEstado);
+        
+        $html = '<select name="cidades" id="cidades" class="form-control">';
+        $html .= '<option value="">Selecione uma cidade</option>';
+        foreach ($cidades as $val) {
+            $html .= '<option value="' . $val->cidadeid . ':' . $val->nome . '">' . $val->nome . '</option>';
+        }
+        
+        $html .= '</select>';
+        
+        print_r($html);
+    }
+
+    function captchaAtendimento()
+    {
+        $this->load->helper('captcha');
+        $reload = $this->input->post('reload', true);
+        
+        // Parametros para o captcha
+        $vals = array(
+            'img_path' => getcwd() . '/public/imagens/captcha/',
+            'img_url' => base_url() . 'public/imagens/captcha/',
+            'font_path' => getcwd() . '/public/fonts/courbd.ttf',
+            'img_width' => '150',
+            'img_height' => 30,
+            'expiration' => 7200
+        );
+        
+        $cap = create_captcha($vals);
+        
+        // $_SESSION['captchaAtendimento'] = $cap['word'];
+        
+        $this->session->set_userdata('captchaAtendimento', $cap['word']);
+        
+        if ($reload) {
+            $this->layout = '';
+            print_r($cap['image']);
+        } else {
+            return $cap['image'];
+        }
+    }
+
+    function boleto()
+    {
+        // incluindo novo css        
+        $data['resultado'] = '';
+        
+        $email = $this->input->post('emailboleto', TRUE);
+        
+        if ($email) {
+            $dados = $this->webservice->reimprime($email, 5);
+            $dados2 = $this->webservice->reimprime($email, 134);
+            //print_pre($dados2->dados);die;
+            $dados->dados = array_unique(array_merge($dados->dados, $dados2->dados), SORT_REGULAR);
+            //$dados->dados = array_unique($dados->dados, SORT_REGULAR);
+            $data['dados'] = $dados;
+        }
+        
+        $this->load->view('boleto', $data);
+    }
+
+    function captcha()
+    {
+        $this->layout = '';
+        
+        // captcha width
+        $captcha_w = 50;
+        // captcha height
+        $captcha_h = 40;
+        // minimum font size; each operation element changes size
+        $min_font_size = 12;
+        // maximum font size
+        $max_font_size = 18;
+        // rotation angle
+        $angle = 20;
+        // background grid size
+        $bg_size = 13;
+        // path to font - needed to display the operation elements
+        $font_path = getcwd() . '/public/fonts/courbd.ttf';
+        // array of possible operators
+        $operators = array(
+            '+'
+        );
+        // first number random value; keep it lower than $second_num
+        $first_num = rand(1, 9);
+        
+        shuffle($operators);
+        // $expression = $second_num.$operators[0].$first_num;
+        $expression = $first_num;
+        /*
+         * operation result is stored in $session_var
+         */
+        
+        eval("\$session_var=" . $first_num . ";");
+        /*
+         * save the operation result in session to make verifications
+         */
+        // $this->session->set_userdata( array('security_number' => $session_var) );
+        session_start();
+        $_SESSION['security_number'] = $session_var;
+        
+        /*
+         * start the captcha image
+         */
+        $img = imagecreate($captcha_w, $captcha_h);
+        /*
+         * Some colors. Text is $black, background is $white, grid is $grey
+         */
+        $black = imagecolorallocate($img, 0, 0, 0);
+        $white = imagecolorallocate($img, 255, 255, 255);
+        $grey = imagecolorallocate($img, 215, 215, 215);
+        /*
+         * make the background white
+         */
+        imagefill($img, 0, 0, $white);
+        /* the background grid lines - vertical lines */
+        for ($t = $bg_size; $t < $captcha_w; $t += $bg_size) {
+            imageline($img, $t, 0, $t, $captcha_h, $grey);
+        }
+        /* background grid - horizontal lines */
+        for ($t = $bg_size; $t < $captcha_h; $t += $bg_size) {
+            imageline($img, 0, $t, $captcha_w, $t, $grey);
+        }
+        
+        $item_space = $captcha_w / 3;
+        
+        imagettftext($img, rand($min_font_size, $max_font_size), rand(- $angle, $angle), rand(25, $item_space - 20), rand(25, $captcha_h - 25), $black, $font_path, $first_num);
+        
+        /* image is .jpg */
+        header("Content-type:image/jpeg");
+        /* name is secure.jpg */
+        header("Content-Disposition:inline ; filename=secure.jpg");
+        /* output image */
+        imagejpeg($img);
+        
+        die();
+    }
+
+    function _enviarEmailFaleconosco()
+    {
+        $nome = $this->input->post('nome', true);
+        $email = $this->input->post('email', true);
+        $telefone = $this->input->post('telefone', true);
+        $cidadePost = $this->input->post('cidades', true);
+        $estado = $this->input->post('estado', true);
+        $assunto = $this->input->post('assunto', true);
+        $mensagem = $this->input->post('mensagem', true);
+        $spam = false;
+        
+        $arr = explode(':', $cidadePost);
+        $cidade = $arr[1];
+        $cidadeID = $arr[0];
+        $return = new stdClass();
+        
+        // Tags spammers
+        if (preg_match("/bcc:|cc:|multipart|\[url|Content-Type:/i", implode($_POST))) {
+            $spam = true;
+        }
+        
+        // instâncias de '<a' ou 'href' aparecer em qualquer campo do formulário.
+        if (preg_match_all("/<a|href/i", implode($_POST), $out) > 0) {
+            $spam = true;
+        }
+        
+        // Lista de palavras comuns em spam
+        $spamwords = "/(rffotvay|hknaswxqdz|kfemiwgzaa)/i";
+        if (preg_match($spamwords, implode($_POST))) {
+            $spam = true;
+        }
+        
+        // verificação se a 'page referrer' existe e caso exista se ela encontra-se no mesmo Web Site do script de processamento.
+        if (isset($_SERVER['HTTP_REFERER']) && substr_count($_SERVER['HTTP_REFERER'], $_SERVER['HTTP_HOST']) == 0) {
+            $spam = true;
+        }
+        
+        // Se for um spam retorna e não envia o e-mail
+        if ($spam) {
+            $return->erro = 1;
+            $return->msg = 'Erro ao enviar Mensagem!<br>Por favor, tente mais tarde.';
+            return $return;
+        }
+        
+        $para = 'faleconosco@aprovaconcursos.com.br';
+        // $para = 'kleber.goncalves@iesde.com.br';
+        
+        $this->load->library('email');
+        $config = $this->configuracaoemail();
+        $this->email->initialize($config);
+        /* Email para faleconosco */
+        // DE
+        $this->email->from($email, $nome);
+        
+        // ASSUNTO
+        switch ($assunto) {
+            case 1:
+                $assunto = 'Cursos Preparatórios';
+                break;
+            case 2:
+                $assunto = 'Pagamento';
+                break;
+            case 3:
+                $assunto = 'Acesso às videoaulas';
+                break;
+            case 4:
+                $assunto = 'Preço';
+                break;
+            case 5:
+                $assunto = 'Sugestões';
+                break;
+            case 6:
+                $assunto = 'Críticas';
+                break;
+            case 7:
+                $assunto = 'Dúvidas de conteúdo';
+                break;
+            case 8:
+                $assunto = 'Imprensa';
+                break;
+            case 9:
+                $assunto = 'Aprova Premium';
+                $para = 'aprovapremium@aprovaconcursos.com.br';
+                break;
+            default:
+                $assunto = 'Outros';
+                break;
+        }
+        // PARA
+        
+        if (ENVIRONMENT != 'production') {
+            $para = EMAIL_TESTE;
+        }
+        
+        $this->email->to($para);
+        $this->email->subject($assunto);
+        // DADOS EMAIL
+        
+        $dados = "<font face='Arial' size='2'>
+						<p style='padding-left:20px; line-height:20px; color:#28607d;'><br /><br />
+							<b>Nome</b>: " . $nome . "<br />
+							<b>Email</b>: " . $email . "<br />
+							<b>Telefone</b>: " . $telefone . "<br />
+							<b>Cidade</b>: " . $cidade . "<br />
+							<b>Estado</b>: " . $estado . "<br />
+							<b>Mensagem</b>: " . $mensagem . "<br />
+						</p>
+					  </font>";
+        
+        $this->email->message($dados);
+        
+        // Após enviar o primeiro e-mail, enviamos o segundo para o aluno
+        if ($this->email->send()) {
+            /* Email para estudante */
+            // DE
+            $this->email->from('faleconosco@aprovaconcursos.com.br');
+            // PARA
+            if (ENVIRONMENT != 'production') {
+                $this->email->to(EMAIL_TESTE);
+            } else {
+                $this->email->to($email);
+            }
+            // ASSUNTO
+            $this->email->subject('Fale Conosco - APROVA CONCURSOS');
+            // DADOS EMAIL
+            
+            $dados = "<font face='Arial' size='2'>
+							<p style='padding-left:20px; line-height:20px; color:#28607d;'>
+							Mensagem enviada com sucesso! Você receberá uma resposta em até 2 dias úteis.<br /><br />
+								<b>Nome</b>: " . $nome . "<br />
+								<b>Email</b>: " . $email . "<br />
+								<b>Telefone</b>: " . $telefone . "<br />
+								<b>Cidade</b>: " . $cidade . "<br />
+								<b>Estado</b>: " . $estado . "<br />
+								<b>Mensagem</b>: " . $mensagem . "<br />
+							</p>
+						  </font>";
+            $this->email->message($dados);
+            $this->email->send();
+        }
+        /* ---------------------------------------------------- */
+        
+        // Gravando no banco o envio do email:
+        $dadosInsert['Nome'] = $nome;
+        $dadosInsert['De'] = $email;
+        $dadosInsert['Para'] = $para;
+        $dadosInsert['Assunto'] = $assunto;
+        $dadosInsert['Telefone'] = $telefone;
+        $dadosInsert['CidadeID'] = $cidadeID;
+        $dadosInsert['Msg'] = strip_tags($mensagem);
+        $dadosInsert['AssinaturaSiteID'] = 5;
+        
+        $this->principal->insertEmail($dadosInsert);
+        
+        $return->erro = 0;
+        $return->msg = 'Mensagem enviada com sucesso!<br>Uma cópia desta mensagem foi enviada para o e-mail: <strong>' . $email . '</strong><br>Você receberá uma resposta em até 2 dias úteis.';
+        return $return;
+    }
+
+    function configuracaoemail()
+    {
+        $config["protocol"] = "smtp";
+        $config["smtp_host"] = "smtp.aprovaconcursos.com.br";
+        $config["charset"] = "ISO 8859-1";
+        $config["smtp_user"] = "faleconosco@aprovaconcursos.com.br";
+        $config["smtp_pass"] = "maestrA";
+        $config["smtp_port"] = "25";
+        $config["mailtype"] = "html";
+        $config["crlf"] = "\r\n";
+        $config["newline"] = "\r\n";
+        
+        return $config;
+    }
+
+    function buscaCep()
+    {
+        $this->load->helper('parametros');
+        
+        $this->layout = '';
+        
+        $uf = $this->input->post('estado');
+        $cidade = utf8_encode($this->input->post('cidade'));
+        $bairro = utf8_encode($this->input->post('bairro'));
+        $logradouro = utf8_encode($this->input->post('logradouro'));
+        
+        $client = new nusoap_client(WEBSERVICE_URL . "localizacoes/buscaCep");
+        
+        $result = $client->call('buscaCep', array(
+            'uf' => $uf,
+            'cidade' => $cidade,
+            'bairro' => $bairro,
+            'logradouro' => $logradouro
+        ));
+        
+        print_r(json_decode($result));
+    }
+
+    function buscaEndereco()
+    {
+        $this->layout = '';
+        
+        $cep = str_replace('-', '', $this->input->post('cep'));
+        
+        $client = new nusoap_client(WEBSERVICE_URL . "localizacoes/buscaEndereco");
+        
+        $result = $client->call('buscaEndereco', array(
+            'cep' => $cep
+        ));
+        
+        print($result);
+    }
+
+    function buscaCidade()
+    {
+        $estado = $this->input->post("estado");
+        
+        $buscaCidade = $this->principal->buscaCidade($estado);
+        $cidade = $this->principal_lib->montaCidade($buscaCidade);
+        
+        print_r($cidade);
+        exit();
+    }
+
+    function assinaturaCompleta()
+    {
+    	$this->load->model('concursos_model', 'concursos');
+        $this->js[] = 'assinatura-completa';
+        
+        // incluindo novo css
+        
+        $this->topo = $this->principal_lib->topo('assinatura-completa');
+        
+        $this->menuVertical = '';
+        $this->title = $this->title . ' | Aprova Concursos';
+        
+        $pacotesasscompl = $this->principal->getGrupoAulaAssinaturaCompleta();
+      
+        foreach ($pacotesasscompl as $key => $value) {
+        	 $campanha = $this->concursos->getCampanha($value->grupoaulaid);
+        	 if(verificaCampanha($campanha)){
+        	 	$pacotesasscompl[$key]->valordesconto = $value->valor - ($value->valor * ($campanha->percentualdesconto / 100));
+        	 	$pacotesasscompl[$key]->valormesdesconto = ($pacotesasscompl[$key]->valordesconto / ($value->tempo / 30)); 
+        	 }
+        	
+        }
+        //print_pre($pacotesasscompl);die;
+       $dados['result'] = $pacotesasscompl;
+        
+        // $dados['conteudo'] = $this->principal_lib->montaConteudoAssCompleta($result);
+        // $dados['conteudoInferior'] = $this->principal_lib->montaConteudoInferiorAssCompleta($result);
+        
+        $this->load->view('assinaturaCompleta', $dados);
+    }
+
+    function assinaturaCompletaUpgrade($MatriculaGrupo = "")
+    {
+        
+        // incluindo novo css
+        $this->css[] = 'planoAssinatura/font-awesome';
+        $this->css[] = 'planoAssinatura/styles';
+        $this->css[] = 'planoAssinatura/normalize';
+        $this->css[] = 'planoAssinatura/foundation.min';
+        $this->css[] = $this->minify->getCSS('assinatura-completa-upgrade.min', $this->cssMinify, ENVIRONMENT, VERSIONCSS);
+        
+        $this->topo = $this->principal_lib->topo('assinatura-completa');
+        
+        $this->menuVertical = '';
+        $this->title = $this->title . ' | Aprova Concursos';
+        
+        $pacote = $this->principal->getPacote();
+        
+        if (! empty($MatriculaGrupo)) {
+            
+            $aux = explode('-', $MatriculaGrupo);
+            
+            if (count($aux) == 2) {
+                $matriculaID = $aux[0];
+                $GrupoAulaID = $aux[1];
+                $curso = $this->principal->getCurso($matriculaID, $GrupoAulaID);
+            }
+        }
+        
+        if (! $curso) {
+            redirect('assinatura-completa');
+            return false;
+        }
+        
+        $dados['grupoAulaID'] = $pacote[0]->grupoAulaID;
+        $dados['nomeCurso'] = $curso[0]->nome;
+        $dados['valor'] = number_format($curso[0]->valorRec, 2, ',', ' ');
+        $dados['valorMensal'] = number_format(($pacote[0]->valor - $curso[0]->valorRec) / 12, 2, ',', ' ');
+        $dados['assinaturaMatriculaID'] = $curso[0]->assinaturaMatriculaID;
+        
+        $this->load->view('assinaturaCompletaUpgrade', $dados);
+    }
+
+    function encodeSEOString($string)
+    {
+        $string = preg_replace("`\[.*\]`U", "", $string);
+        $string = preg_replace('`&(amp;)?#?[a-z0-9]+;`i', '-', $string);
+        $string = htmlentities($string, ENT_COMPAT, 'iso-8859-1');
+        $string = preg_replace("`&([a-z])(acute|uml|circ|grave|ring|cedil|slash|tilde|caron|lig|quot|rsquo);`i", "\\1", $string);
+        $string = preg_replace(array(
+            "`[^a-z0-9]`i",
+            "`[-]+`"
+        ), "-", $string);
+        
+        return strtolower(trim($string, '-'));
+    }
+
+    function assinaturaUpgradeEstatica()
+    {
+        // incluindo novo css
+        $this->cssMinify[] = 'planoAssinatura/font-awesome';
+        $this->cssMinify[] = 'planoAssinatura/styles';
+        $this->cssMinify[] = 'planoAssinatura/normalize';
+        $this->cssMi[] = 'planoAssinatura/foundation.min';
+        
+        $this->css[] = $this->minify->getCSS('assinatura-completa-estatistica.min', $this->cssMinify, ENVIRONMENT, VERSIONCSS);
+        
+        $this->menuVertical = '';
+        $this->title = $this->title . ' | Aprova Concursos';
+        
+        $this->load->view('assinaturaUpgradeEstatica');
+    }
+
+    function enviaemailsmartfocus()
+    {
+        
+        // 'http://p5trc.emv2.com/D2UTF8?emv_tag=6F440100001FDCB1&emv_ref=EdX7CqkmjWK38SA9MOPvuNfRXkh-HKzD-jjdet9CK7LYK-o&EMAIL_FIELD=tiago.fedatto@iesde.com.br&FIRSTNAME_FIELD=Tiago'
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, 'http://p5trc.emv2.com/D2UTF8?emv_tag=CE1B5C451C040000&emv_ref=EdX7CqkmjWmQ8SA9MOPvuNekXU0IGd7H_zmue602WMDZK4A&EMAIL_FIELD=tiago.fedatto@iesde.com.br&FIRSTNAME_FIELD=Tiago&NOME_COMP_FIELD=Tiago Fedatto');
+        // curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        // curl_setopt($ch, CURLOPT_POST, 1);
+        // curl_setopt($ch, CURLOPT_POSTFIELDS, 'emv_tag=6F440100001FDCB1&emv_ref=EdX7CqkmjWK38SA9MOPvuNfRXkh-HKzD-jjdet9CK7LYK-o&EMAIL_FIELD=tfedatto@gmail.com' );
+        $output = curl_exec($ch);
+        
+        if (! curl_errno($ch)) {
+            $info = curl_getinfo($ch);
+            echo 'Took ' . $info['total_time'] . ' seconds to send a request to ' . $info['url'] . '  <br />';
+        } else {
+            echo 'Curl error: ' . curl_error($ch);
+        }
+        
+        curl_close($ch);
+        
+        print_r($output);
+        die();
+    }
+        
+    function blackfriday(){
+    	$this->layout = '';
+		$data['msg'] = '';
+		$data['convercao'] = false;
+	
+		$cadastrou = array_key_exists ( 'emailok' , $this->input->get() );
+		
+		if($cadastrou){
+			$data['convercao'] = true;
+			$data['msg'] = 'Email Cadastrado com Sucesso!';
+		}
+		
+		$erro = array_key_exists ( 'erro' , $this->input->get());
+		
+		if($erro){
+			$data['msg'] = 'Problemas ao cadastrar o email, tente novamente mais tarde!';
+		}
+	
+    	$this->load->view('blackfriday/index',$data);
+    }
+}
+
+/* End of file principal.php */
+/* Location: ./system/application/controllers/principal.php */
